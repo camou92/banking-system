@@ -21,7 +21,45 @@ jobs:
   # ==========================================================
   # 1. DETECT CHANGES
   # ==========================================================
+  oidc-test:
+    name: Test GitHub OIDC
+    runs-on: ubuntu-latest
 
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Get OIDC claims
+        run: |
+          RESPONSE=$(curl -s \
+            -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            -H "Accept: application/json; api-version=2.0" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com")
+
+          TOKEN=$(echo "$RESPONSE" | jq -r '.value')
+
+          if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
+            echo "Failed to retrieve OIDC token"
+            exit 1
+          fi
+
+          PAYLOAD=$(echo "$TOKEN" | cut -d '.' -f 2)
+
+          # Add padding if necessary
+          case $((${#PAYLOAD} % 4)) in
+            2) PAYLOAD="${PAYLOAD}==" ;;
+            3) PAYLOAD="${PAYLOAD}=" ;;
+          esac
+
+          echo "$PAYLOAD" | base64 -d 2>/dev/null | jq '{
+            aud,
+            sub,
+            repository,
+            repository_owner,
+            ref,
+            event_name
+          }'
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
