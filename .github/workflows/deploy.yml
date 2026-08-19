@@ -19,6 +19,19 @@ env:
 
 jobs:
 
+  oidc-debug:
+    name: Debug OIDC
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - name: Debug OIDC claims
+        uses: github/actions-oidc-debugger@main
+        with:
+          audience: sts.amazonaws.com
   # ==========================================================
   # 1. DETECT CHANGES
   # ==========================================================
