@@ -520,7 +520,7 @@ jobs:
       - name: Copy docker-compose.prod.yml
         run: |
 
-          COMPOSE=$(base64 -w 0 docker-compose.prod.yml)
+          COMPOSE=$(base64 -w 0 infrastructure/docker-compose.prod.yml)
 
           COMMAND_ID=$(aws ssm send-command \
             --instance-ids "${{ steps.ec2.outputs.instance_id }}" \
