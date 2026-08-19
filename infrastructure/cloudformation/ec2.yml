@@ -1,593 +1,316 @@
-name: Banking CI/CD
+AWSTemplateFormatVersion: '2010-09-09'
 
-on:
-  push:
-    branches:
-      - main
+Description: >
+  Banking System - Phase 1
+  VPC + Public Subnet + Internet Gateway + EC2 + IAM
 
-permissions:
-  id-token: write
-  contents: read
+Parameters:
 
-env:
-  AWS_REGION: eu-north-1
-  AWS_ACCOUNT_ID: "091708608610"
-  ECR_REGISTRY: 091708608610.dkr.ecr.eu-north-1.amazonaws.com
-  ECR_NAMESPACE: banking
-  CF_STACK_NAME: banking-infrastructure
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    Description: EC2 instance type
 
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing EC2 KeyPair
 
-jobs:
+Resources:
 
-  # ==========================================================
-  # 1. DETECT CHANGES
-  # ==========================================================
+  # =========================================================
+  # VPC
+  # =========================================================
 
-  changes:
-    name: Detect changes
-    runs-on: ubuntu-latest
+  BankingVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
 
-    outputs:
-      account: ${{ steps.filter.outputs.account }}
-      transaction: ${{ steps.filter.outputs.transaction }}
-      fraud: ${{ steps.filter.outputs.fraud }}
-      notification: ${{ steps.filter.outputs.notification }}
-      payment: ${{ steps.filter.outputs.payment }}
-      gateway: ${{ steps.filter.outputs.gateway }}
-      compose: ${{ steps.filter.outputs.compose }}
-      infrastructure: ${{ steps.filter.outputs.infrastructure }}
+      Tags:
+        - Key: Name
+          Value: banking-vpc
 
-    steps:
 
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+  # =========================================================
+  # INTERNET GATEWAY
+  # =========================================================
 
-      - name: Detect changed files
-        id: filter
-        uses: dorny/paths-filter@v3
-        with:
-          filters: |
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
 
-            account:
-              - 'account-service/**'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: banking-igw
 
-            transaction:
-              - 'transaction-service/**'
 
-            fraud:
-              - 'fraud-detection-service/**'
+  AttachInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
 
-            notification:
-              - 'notification-service/**'
+    Properties:
+      VpcId: !Ref BankingVPC
+      InternetGatewayId: !Ref InternetGateway
 
-            payment:
-              - 'payment-service/**'
 
-            gateway:
-              - 'api-gateway/**'
+  # =========================================================
+  # PUBLIC SUBNET
+  # =========================================================
 
-            compose:
-              - 'docker-compose.prod.yml'
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
 
-            infrastructure:
-              - 'infrastructure/cloudformation/**'
+    Properties:
+      VpcId: !Ref BankingVPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ''
 
+      MapPublicIpOnLaunch: true
 
-  # ==========================================================
-  # 2. ACCOUNT SERVICE
-  # ==========================================================
+      Tags:
+        - Key: Name
+          Value: banking-public-subnet
 
-  account-service:
-    name: Build & Push account-service
-    needs: changes
 
-    if: needs.changes.outputs.account == 'true'
+  # =========================================================
+  # ROUTE TABLE
+  # =========================================================
 
-    runs-on: ubuntu-latest
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
 
-    steps:
+    Properties:
+      VpcId: !Ref BankingVPC
 
-      - name: Checkout
-        uses: actions/checkout@v4
+      Tags:
+        - Key: Name
+          Value: banking-public-route-table
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Login to ECR
-        uses: aws-actions/amazon-ecr-login@v2
+  PublicRoute:
+    Type: AWS::EC2::Route
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+    DependsOn: AttachInternetGateway
 
-      - name: Build and Push
-        uses: docker/build-push-action@v6
-        with:
-          context: ./account-service
-          push: true
-          tags: |
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/account-service:latest
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/account-service:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
 
 
-  # ==========================================================
-  # 3. TRANSACTION SERVICE
-  # ==========================================================
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
 
-  transaction-service:
-    name: Build & Push transaction-service
-    needs: changes
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
 
-    if: needs.changes.outputs.transaction == 'true'
 
-    runs-on: ubuntu-latest
+  # =========================================================
+  # SECURITY GROUP
+  # =========================================================
 
-    steps:
+  BankingSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
 
-      - name: Checkout
-        uses: actions/checkout@v4
+    Properties:
+      GroupDescription: Banking application security group
+      VpcId: !Ref BankingVPC
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+      SecurityGroupIngress:
 
-      - name: Login to ECR
-        uses: aws-actions/amazon-ecr-login@v2
+        # Spring Boot Gateway
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      SecurityGroupEgress:
 
-      - name: Build and Push
-        uses: docker/build-push-action@v6
-        with:
-          context: ./transaction-service
-          push: true
-          tags: |
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/transaction-service:latest
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/transaction-service:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
 
+      Tags:
+        - Key: Name
+          Value: banking-security-group
 
-  # ==========================================================
-  # 4. FRAUD DETECTION SERVICE
-  # ==========================================================
 
-  fraud-detection-service:
-    name: Build & Push fraud-detection-service
-    needs: changes
+  # =========================================================
+  # IAM ROLE FOR EC2
+  # =========================================================
 
-    if: needs.changes.outputs.fraud == 'true'
+  EC2Role:
+    Type: AWS::IAM::Role
 
-    runs-on: ubuntu-latest
+    Properties:
+      RoleName: banking-ec2-role
 
-    steps:
+      AssumeRolePolicyDocument:
 
-      - name: Checkout
-        uses: actions/checkout@v4
+        Version: '2012-10-17'
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+        Statement:
 
-      - name: Login to ECR
-        uses: aws-actions/amazon-ecr-login@v2
+          - Effect: Allow
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+            Principal:
+              Service:
+                - ec2.amazonaws.com
 
-      - name: Build and Push
-        uses: docker/build-push-action@v6
-        with:
-          context: ./fraud-detection-service
-          push: true
-          tags: |
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/fraud-detection-service:latest
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/fraud-detection-service:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+            Action:
+              - sts:AssumeRole
 
+      ManagedPolicyArns:
 
-  # ==========================================================
-  # 5. NOTIFICATION SERVICE
-  # ==========================================================
+        # SSM
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
 
-  notification-service:
-    name: Build & Push notification-service
-    needs: changes
+        # ECR pull
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
 
-    if: needs.changes.outputs.notification == 'true'
 
-    runs-on: ubuntu-latest
+      Policies:
 
-    steps:
+        - PolicyName: BankingSecretsRead
 
-      - name: Checkout
-        uses: actions/checkout@v4
+          PolicyDocument:
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+            Version: '2012-10-17'
 
-      - name: Login to ECR
-        uses: aws-actions/amazon-ecr-login@v2
+            Statement:
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+              - Effect: Allow
 
-      - name: Build and Push
-        uses: docker/build-push-action@v6
-        with:
-          context: ./notification-service
-          push: true
-          tags: |
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/notification-service:latest
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/notification-service:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+                Action:
+                  - secretsmanager:GetSecretValue
 
+                Resource:
+                  - !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:banking/*
 
-  # ==========================================================
-  # 6. PAYMENT SERVICE
-  # ==========================================================
 
-  payment-service:
-    name: Build & Push payment-service
-    needs: changes
+  # =========================================================
+  # INSTANCE PROFILE
+  # =========================================================
 
-    if: needs.changes.outputs.payment == 'true'
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
 
-    runs-on: ubuntu-latest
+    Properties:
+      InstanceProfileName: banking-ec2-profile
+      Roles:
+        - !Ref EC2Role
 
-    steps:
 
-      - name: Checkout
-        uses: actions/checkout@v4
+  # =========================================================
+  # EC2
+  # =========================================================
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
+  BankingEC2:
+    Type: AWS::EC2::Instance
 
-      - name: Login to ECR
-        uses: aws-actions/amazon-ecr-login@v2
+    Properties:
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      InstanceType: !Ref InstanceType
 
-      - name: Build and Push
-        uses: docker/build-push-action@v6
-        with:
-          context: ./payment-service
-          push: true
-          tags: |
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/payment-service:latest
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/payment-service:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      KeyName: !Ref KeyName
 
+      ImageId: '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}'
 
-  # ==========================================================
-  # 7. API GATEWAY
-  # ==========================================================
+      IamInstanceProfile: !Ref EC2InstanceProfile
 
-  gateway-service:
-    name: Build & Push gateway-service
-    needs: changes
+      SubnetId: !Ref PublicSubnet
 
-    if: needs.changes.outputs.gateway == 'true'
+      SecurityGroupIds:
+        - !Ref BankingSecurityGroup
 
-    runs-on: ubuntu-latest
-
-    steps:
-
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Login to ECR
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and Push
-        uses: docker/build-push-action@v6
-        with:
-          context: ./api-gateway
-          push: true
-          tags: |
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/gateway-service:latest
-            ${{ env.ECR_REGISTRY }}/${{ env.ECR_NAMESPACE }}/gateway-service:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-
-  # ==========================================================
-  # 8. CLOUDFORMATION
-  # ==========================================================
-
-  infrastructure:
-    name: Deploy CloudFormation
-    needs: changes
-
-    if: needs.changes.outputs.infrastructure == 'true'
-
-    runs-on: ubuntu-latest
-
-    steps:
-
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS deploy credentials
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Check AWS identity
-        run: aws sts get-caller-identity
-
-      - name: Validate CloudFormation
-        run: |
-          aws cloudformation validate-template \
-            --template-body file://infrastructure/cloudformation/ec2.yml
-
-      - name: Deploy CloudFormation
-        run: |
-          aws cloudformation deploy \
-            --template-file infrastructure/cloudformation/ec2.yml \
-            --stack-name ${{ env.CF_STACK_NAME }} \
-            --parameter-overrides \
-              KeyName=banking-key \
-              InstanceType=t3.micro \
-            --capabilities CAPABILITY_NAMED_IAM
-
-
-  # ==========================================================
-  # 9. DEPLOY APPLICATION
-  # ==========================================================
-
-  deploy:
-    name: Deploy application to EC2
-
-    needs:
-      - changes
-      - account-service
-      - transaction-service
-      - fraud-detection-service
-      - notification-service
-      - payment-service
-      - gateway-service
-      - infrastructure
-
-    if: |
-      always() &&
-      needs.changes.result == 'success' &&
-      (
-        needs.changes.outputs.account == 'true' ||
-        needs.changes.outputs.transaction == 'true' ||
-        needs.changes.outputs.fraud == 'true' ||
-        needs.changes.outputs.notification == 'true' ||
-        needs.changes.outputs.payment == 'true' ||
-        needs.changes.outputs.gateway == 'true' ||
-        needs.changes.outputs.compose == 'true' ||
-        needs.changes.outputs.infrastructure == 'true'
-      ) &&
-      (
-        needs.account-service.result == 'success' ||
-        needs.account-service.result == 'skipped'
-      ) &&
-      (
-        needs.transaction-service.result == 'success' ||
-        needs.transaction-service.result == 'skipped'
-      ) &&
-      (
-        needs.fraud-detection-service.result == 'success' ||
-        needs.fraud-detection-service.result == 'skipped'
-      ) &&
-      (
-        needs.notification-service.result == 'success' ||
-        needs.notification-service.result == 'skipped'
-      ) &&
-      (
-        needs.payment-service.result == 'success' ||
-        needs.payment-service.result == 'skipped'
-      ) &&
-      (
-        needs.gateway-service.result == 'success' ||
-        needs.gateway-service.result == 'skipped'
-      ) &&
-      (
-        needs.infrastructure.result == 'success' ||
-        needs.infrastructure.result == 'skipped'
-      )
-
-    runs-on: ubuntu-latest
-
-    steps:
-
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      # --------------------------------------------------------
-      # AWS DEPLOY ROLE
-      # --------------------------------------------------------
-
-      - name: Configure AWS deploy credentials
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Check AWS identity
-        run: |
-          aws sts get-caller-identity
-
-      # --------------------------------------------------------
-      # GET EC2 INSTANCE ID
-      #
-      # We retrieve it from CloudFormation instead of keeping
-      # it permanently in GitHub Secrets.
-      # --------------------------------------------------------
-
-      - name: Get EC2 instance ID
-        id: ec2
-        run: |
-
-          INSTANCE_ID=$(aws cloudformation describe-stacks \
-            --stack-name ${{ env.CF_STACK_NAME }} \
-            --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" \
-            --output text)
-
-          if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ]; then
-            echo "EC2 instance ID not found in CloudFormation outputs."
-            exit 1
-          fi
-
-          echo "Instance ID: $INSTANCE_ID"
-
-          echo "instance_id=$INSTANCE_ID" >> "$GITHUB_OUTPUT"
-
-      # --------------------------------------------------------
-      # COPY DOCKER COMPOSE TO EC2
-      # --------------------------------------------------------
-
-      - name: Copy docker-compose.prod.yml
-        run: |
-
-          COMPOSE=$(base64 -w 0 docker-compose.prod.yml)
-
-          COMMAND_ID=$(aws ssm send-command \
-            --instance-ids "${{ steps.ec2.outputs.instance_id }}" \
-            --document-name "AWS-RunShellScript" \
-            --comment "Update banking docker compose" \
-            --parameters "commands=[
-              \"mkdir -p /opt/banking\",
-              \"echo $COMPOSE | base64 -d > /opt/banking/docker-compose.prod.yml\"
-            ]" \
-            --query "Command.CommandId" \
-            --output text)
-
-          echo "SSM command: $COMMAND_ID"
-
-          aws ssm wait command-executed \
-            --command-id "$COMMAND_ID" \
-            --instance-id "${{ steps.ec2.outputs.instance_id }}"
-
-      # --------------------------------------------------------
-      # DEPLOY
-      # --------------------------------------------------------
-
-      - name: Deploy containers
-        env:
-          INSTANCE_ID: ${{ steps.ec2.outputs.instance_id }}
-        run: |
-
-          # ----------------------------------------------------
-          # Determine what needs to be deployed
-          # ----------------------------------------------------
-
-          COMMANDS=""
-
-          if [ "${{ needs.changes.outputs.infrastructure }}" = "true" ]; then
-            echo "Infrastructure changed -> deploy all services"
-            DEPLOY_ALL=true
-          elif [ "${{ needs.changes.outputs.compose }}" = "true" ]; then
-            echo "Docker Compose changed -> deploy all services"
-            DEPLOY_ALL=true
-          else
-            DEPLOY_ALL=false
-          fi
-
-          if [ "$DEPLOY_ALL" = "true" ]; then
-
-            COMMANDS='
-              docker compose pull;
-              docker compose up -d --remove-orphans;
-            '
-
-          else
-
-            if [ "${{ needs.changes.outputs.account }}" = "true" ]; then
-              COMMANDS="${COMMANDS} docker compose pull account-service; docker compose up -d account-service;"
-            fi
-
-            if [ "${{ needs.changes.outputs.transaction }}" = "true" ]; then
-              COMMANDS="${COMMANDS} docker compose pull transaction-service; docker compose up -d transaction-service;"
-            fi
-
-            if [ "${{ needs.changes.outputs.fraud }}" = "true" ]; then
-              COMMANDS="${COMMANDS} docker compose pull fraud-detection-service; docker compose up -d fraud-detection-service;"
-            fi
-
-            if [ "${{ needs.changes.outputs.notification }}" = "true" ]; then
-              COMMANDS="${COMMANDS} docker compose pull notification-service; docker compose up -d notification-service;"
-            fi
-
-            if [ "${{ needs.changes.outputs.payment }}" = "true" ]; then
-              COMMANDS="${COMMANDS} docker compose pull payment-service; docker compose up -d payment-service;"
-            fi
-
-            if [ "${{ needs.changes.outputs.gateway }}" = "true" ]; then
-              COMMANDS="${COMMANDS} docker compose pull gateway-service; docker compose up -d gateway-service;"
-            fi
-
-          fi
-
-          echo "Deployment commands:"
-          echo "$COMMANDS"
-
-          # ----------------------------------------------------
-          # Execute deployment through SSM
-          # ----------------------------------------------------
-
-          COMMAND_ID=$(aws ssm send-command \
-            --instance-ids "$INSTANCE_ID" \
-            --document-name "AWS-RunShellScript" \
-            --comment "Deploy banking application" \
-            --parameters "commands=[
-              \"cd /opt/banking\",
-              \"aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 091708608610.dkr.ecr.eu-north-1.amazonaws.com\",
-              \"$COMMANDS\",
-              \"docker image prune -f\"
-            ]" \
-            --query "Command.CommandId" \
-            --output text)
-
-          echo "Deployment command ID: $COMMAND_ID"
-
-          # ----------------------------------------------------
-          # WAIT
-          # ----------------------------------------------------
-
-          aws ssm wait command-executed \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$INSTANCE_ID"
-
-          # ----------------------------------------------------
-          # SHOW OUTPUT
-          # ----------------------------------------------------
-
-          aws ssm get-command-invocation \
-            --command-id "$COMMAND_ID" \
-            --instance-id "$INSTANCE_ID"
+      Tags:
+
+        - Key: Name
+          Value: banking-ec2
+
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+
+          set -e
+
+          echo "================================="
+          echo "Banking EC2 initialization"
+          echo "================================="
+
+          # Update system
+          dnf update -y
+
+          # Install Docker
+          dnf install -y docker
+
+          # Start Docker
+          systemctl enable docker
+          systemctl start docker
+
+          # Allow ec2-user to use Docker
+          usermod -aG docker ec2-user
+
+          # Install Docker Compose plugin
+          mkdir -p /usr/local/lib/docker/cli-plugins
+
+          curl -SL \
+            https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+            -o /usr/local/lib/docker/cli-plugins/docker-compose
+
+          chmod +x \
+            /usr/local/lib/docker/cli-plugins/docker-compose
+
+          # Install Git
+          dnf install -y git
+
+          echo "================================="
+          echo "Docker version"
+          echo "================================="
+
+          docker --version
+
+          echo "================================="
+          echo "Docker Compose version"
+          echo "================================="
+
+          docker compose version
+
+          echo "================================="
+          echo "EC2 initialization completed"
+          echo "================================="
+
+
+Outputs:
+
+  VPCId:
+    Description: Banking VPC ID
+    Value: !Ref BankingVPC
+
+
+  PublicSubnetId:
+    Description: Public subnet ID
+    Value: !Ref PublicSubnet
+
+
+  SecurityGroupId:
+    Description: Security Group ID
+    Value: !Ref BankingSecurityGroup
+
+
+  EC2InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref BankingEC2
+
+
+  EC2PublicIp:
+    Description: EC2 Public IP
+    Value: !GetAtt BankingEC2.PublicIp
+
+
+  EC2RoleArn:
+    Description: EC2 IAM Role ARN
+    Value: !GetAtt EC2Role.Arn
