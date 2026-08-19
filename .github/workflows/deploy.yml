@@ -469,6 +469,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Find docker compose
+        run: |
+          echo "Current directory:"
+          pwd
+
+          echo "Repository content:"
+          find . -type f -name "*compose*" -print
+
+          echo "Git tracked compose files:"
+          git ls-files | grep -i compose || true
+
       # --------------------------------------------------------
       # AWS DEPLOY ROLE
       # --------------------------------------------------------
