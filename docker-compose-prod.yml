@@ -1,0 +1,173 @@
+services:
+
+  # ─────────────────────────────────────────
+  # REDIS — Streaming URL Cache
+  # ─────────────────────────────────────────
+  redis:
+    image: redis:latest
+    container_name: redis-bank-prod
+    ports:
+      - "6380:6379"
+    networks:
+      - banking-network
+
+  # ─────────────────────────────────────────
+  # MYSQL — Movie Catalog Storage
+  # ─────────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    container_name: mysql-bank-prod
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: content_db
+    ports:
+      - "3308:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - banking-network
+
+  # ─────────────────────────────────────────
+  # ZOOKEEPER — Required by Kafka
+  # ─────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: zookeeper-bank-prod
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - banking-network
+
+  # ─────────────────────────────────────────
+  # KAFKA — Event Streaming
+  # ─────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: kafka-bank-prod
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - banking-network
+
+  # ---------------------- APP SERVICES ---------------
+  account-service:
+    container_name: account-service
+    image: 091708608610.dkr.ecr.eu-north-1.amazonaws.com/banking/account-service
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/account_db?createDatabaseIfNotExist=true
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+    depends_on:
+      - mysql
+      - kafka
+    restart: unless-stopped
+    networks:
+      - banking-network
+
+  transaction-service:
+    container_name: transaction-service
+    image: 091708608610.dkr.ecr.eu-north-1.amazonaws.com/banking/transaction-service
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/transaction_db?createDatabaseIfNotExist=true
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      ACCOUNT_SERVICE_URL: http://account-service:8081
+    depends_on:
+      - mysql
+      - kafka
+      - redis
+    restart: unless-stopped
+    networks:
+      - banking-network
+
+  fraud-detection-service:
+    container_name: fraud-detection-service
+    image: 091708608610.dkr.ecr.eu-north-1.amazonaws.com/banking/fraud-detection-service
+    ports:
+      - "8084:8084"
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      ACCOUNT_SERVICE_URL: http://account-service:8081
+    depends_on:
+      - kafka
+      - redis
+    restart: unless-stopped
+    networks:
+      - banking-network
+
+  notification-service:
+    container_name: notification-service
+    image: 091708608610.dkr.ecr.eu-north-1.amazonaws.com/banking/notification-service
+    ports:
+      - "8085:8085"
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      ACCOUNT_SERVICE_URL: http://account-service:8081
+    depends_on:
+      - kafka
+      - redis
+    restart: unless-stopped
+    networks:
+      - banking-network
+
+  payment-service:
+    container_name: payment-service
+    image: 091708608610.dkr.ecr.eu-north-1.amazonaws.com/banking/payment-service
+    ports:
+      - "8083:8083"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/payment_db?createDatabaseIfNotExist=true
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      ACCOUNT_SERVICE_URL: http://account-service:8081
+    depends_on:
+      - mysql
+      - kafka
+      - redis
+    restart: unless-stopped
+    networks:
+      - banking-network
+
+  gateway-service:
+    container_name: gateway-service
+    image: 091708608610.dkr.ecr.eu-north-1.amazonaws.com/banking/gateway-service
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_DATA_REDIS_PORT: 6379
+      ACCOUNT_SERVICE_URL: http://account-service:8081
+      TRANSACTION_SERVICE_URL: http://transaction-service:8082
+      PAYMENT_SERVICE_URL: http://payment-service:8083
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - banking-network
+
+volumes:
+  mysql-data:
+
+networks:
+  banking-network:
+    driver: bridge
