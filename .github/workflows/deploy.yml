@@ -496,7 +496,7 @@ jobs:
 
           INSTANCE_ID=$(aws cloudformation describe-stacks \
             --stack-name ${{ env.CF_STACK_NAME }} \
-            --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" \
+            --query "Stacks[0].Outputs[?OutputKey=='EC2InstanceId'].OutputValue" \
             --output text)
 
           if [ -z "$INSTANCE_ID" ] || [ "$INSTANCE_ID" = "None" ]; then
