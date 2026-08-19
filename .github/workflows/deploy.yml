@@ -512,6 +512,11 @@ jobs:
       # COPY DOCKER COMPOSE TO EC2
       # --------------------------------------------------------
 
+      - name: Debug files
+        run: |
+          pwd
+          find . -name "docker-compose.prod.yml" -print
+
       - name: Copy docker-compose.prod.yml
         run: |
 
