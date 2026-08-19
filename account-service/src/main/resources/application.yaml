@@ -43,4 +43,4 @@ management:
     web:
       exposure:
         include: health,info
-debug: true
+debug: false
