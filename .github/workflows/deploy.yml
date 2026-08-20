@@ -16,11 +16,12 @@ env:
   ECR_NAMESPACE: banking
   CF_STACK_NAME: banking-infrastructure
 
-
 jobs:
+
   # ==========================================================
-  # 1. DETECT CHANGES
+  # 1. TEST OIDC
   # ==========================================================
+
   oidc-test:
     name: Test GitHub OIDC
     runs-on: ubuntu-latest
@@ -46,7 +47,6 @@ jobs:
 
           PAYLOAD=$(echo "$TOKEN" | cut -d '.' -f 2)
 
-          # Add padding if necessary
           case $((${#PAYLOAD} % 4)) in
             2) PAYLOAD="${PAYLOAD}==" ;;
             3) PAYLOAD="${PAYLOAD}=" ;;
@@ -60,6 +60,12 @@ jobs:
             ref,
             event_name
           }'
+
+
+  # ==========================================================
+  # 2. DETECT CHANGES
+  # ==========================================================
+
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
@@ -106,14 +112,14 @@ jobs:
               - 'api-gateway/**'
 
             compose:
-              - 'docker-compose.prod.yml'
+              - 'infrastructure/docker-compose-prod.yml'
 
             infrastructure:
               - 'infrastructure/cloudformation/**'
 
 
   # ==========================================================
-  # 2. ACCOUNT SERVICE
+  # 3. ACCOUNT SERVICE
   # ==========================================================
 
   account-service:
@@ -157,7 +163,7 @@ jobs:
 
 
   # ==========================================================
-  # 3. TRANSACTION SERVICE
+  # 4. TRANSACTION SERVICE
   # ==========================================================
 
   transaction-service:
@@ -176,7 +182,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::091708608610:role/github-actions-ecr
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to ECR
@@ -198,7 +204,7 @@ jobs:
 
 
   # ==========================================================
-  # 4. FRAUD DETECTION SERVICE
+  # 5. FRAUD DETECTION SERVICE
   # ==========================================================
 
   fraud-detection-service:
@@ -217,7 +223,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::091708608610:role/github-actions-ecr
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to ECR
@@ -239,7 +245,7 @@ jobs:
 
 
   # ==========================================================
-  # 5. NOTIFICATION SERVICE
+  # 6. NOTIFICATION SERVICE
   # ==========================================================
 
   notification-service:
@@ -258,7 +264,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::091708608610:role/github-actions-ecr
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to ECR
@@ -280,7 +286,7 @@ jobs:
 
 
   # ==========================================================
-  # 6. PAYMENT SERVICE
+  # 7. PAYMENT SERVICE
   # ==========================================================
 
   payment-service:
@@ -299,7 +305,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::091708608610:role/github-actions-ecr
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to ECR
@@ -321,7 +327,7 @@ jobs:
 
 
   # ==========================================================
-  # 7. API GATEWAY
+  # 8. API GATEWAY
   # ==========================================================
 
   gateway-service:
@@ -340,7 +346,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5
         with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::091708608610:role/github-actions-ecr
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to ECR
@@ -362,7 +368,7 @@ jobs:
 
 
   # ==========================================================
-  # 8. CLOUDFORMATION
+  # 9. CLOUDFORMATION
   # ==========================================================
 
   infrastructure:
@@ -381,7 +387,7 @@ jobs:
       - name: Configure AWS deploy credentials
         uses: aws-actions/configure-aws-credentials@v5
         with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::091708608610:role/github-actions-deploy
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Check AWS identity
@@ -404,7 +410,7 @@ jobs:
 
 
   # ==========================================================
-  # 9. DEPLOY APPLICATION
+  # 10. DEPLOY APPLICATION
   # ==========================================================
 
   deploy:
@@ -469,17 +475,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Find docker compose
-        run: |
-          echo "Current directory:"
-          pwd
-
-          echo "Repository content:"
-          find . -type f -name "*compose*" -print
-
-          echo "Git tracked compose files:"
-          git ls-files | grep -i compose || true
-
       # --------------------------------------------------------
       # AWS DEPLOY ROLE
       # --------------------------------------------------------
@@ -487,7 +482,7 @@ jobs:
       - name: Configure AWS deploy credentials
         uses: aws-actions/configure-aws-credentials@v5
         with:
-          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          role-to-assume: arn:aws:iam::091708608610:role/github-actions-deploy
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Check AWS identity
@@ -496,9 +491,6 @@ jobs:
 
       # --------------------------------------------------------
       # GET EC2 INSTANCE ID
-      #
-      # We retrieve it from CloudFormation instead of keeping
-      # it permanently in GitHub Secrets.
       # --------------------------------------------------------
 
       - name: Get EC2 instance ID
@@ -523,11 +515,6 @@ jobs:
       # COPY DOCKER COMPOSE TO EC2
       # --------------------------------------------------------
 
-      - name: Debug files
-        run: |
-          pwd
-          find . -name "docker-compose-prod.yml" -print
-
       - name: Copy docker-compose.prod.yml
         run: |
 
@@ -550,68 +537,89 @@ jobs:
             --command-id "$COMMAND_ID" \
             --instance-id "${{ steps.ec2.outputs.instance_id }}"
 
+          echo "Docker Compose copied successfully."
+
+
       # --------------------------------------------------------
-      # DEPLOY
+      # DEPLOY CONTAINERS
       # --------------------------------------------------------
 
       - name: Deploy containers
         env:
           INSTANCE_ID: ${{ steps.ec2.outputs.instance_id }}
+
         run: |
+
+          COMMANDS=""
 
           # ----------------------------------------------------
           # Determine what needs to be deployed
           # ----------------------------------------------------
 
-          COMMANDS=""
-
           if [ "${{ needs.changes.outputs.infrastructure }}" = "true" ]; then
+
             echo "Infrastructure changed -> deploy all services"
             DEPLOY_ALL=true
+
           elif [ "${{ needs.changes.outputs.compose }}" = "true" ]; then
+
             echo "Docker Compose changed -> deploy all services"
             DEPLOY_ALL=true
+
           else
+
             DEPLOY_ALL=false
+
           fi
+
+
+          # ----------------------------------------------------
+          # Build deployment commands
+          # ----------------------------------------------------
 
           if [ "$DEPLOY_ALL" = "true" ]; then
 
             COMMANDS='
-              docker compose pull;
-              docker compose up -d --remove-orphans;
+              docker compose -f docker-compose.prod.yml pull;
+              docker compose -f docker-compose.prod.yml up -d --remove-orphans;
             '
 
           else
 
             if [ "${{ needs.changes.outputs.account }}" = "true" ]; then
-              COMMANDS="${COMMANDS} docker compose pull account-service; docker compose up -d account-service;"
+              COMMANDS="${COMMANDS} docker compose -f docker-compose.prod.yml pull account-service; docker compose -f docker-compose.prod.yml up -d account-service;"
             fi
 
             if [ "${{ needs.changes.outputs.transaction }}" = "true" ]; then
-              COMMANDS="${COMMANDS} docker compose pull transaction-service; docker compose up -d transaction-service;"
+              COMMANDS="${COMMANDS} docker compose -f docker-compose.prod.yml pull transaction-service; docker compose -f docker-compose.prod.yml up -d transaction-service;"
             fi
 
             if [ "${{ needs.changes.outputs.fraud }}" = "true" ]; then
-              COMMANDS="${COMMANDS} docker compose pull fraud-detection-service; docker compose up -d fraud-detection-service;"
+              COMMANDS="${COMMANDS} docker compose -f docker-compose.prod.yml pull fraud-detection-service; docker compose -f docker-compose.prod.yml up -d fraud-detection-service;"
             fi
 
             if [ "${{ needs.changes.outputs.notification }}" = "true" ]; then
-              COMMANDS="${COMMANDS} docker compose pull notification-service; docker compose up -d notification-service;"
+              COMMANDS="${COMMANDS} docker compose -f docker-compose.prod.yml pull notification-service; docker compose -f docker-compose.prod.yml up -d notification-service;"
             fi
 
             if [ "${{ needs.changes.outputs.payment }}" = "true" ]; then
-              COMMANDS="${COMMANDS} docker compose pull payment-service; docker compose up -d payment-service;"
+              COMMANDS="${COMMANDS} docker compose -f docker-compose.prod.yml pull payment-service; docker compose -f docker-compose.prod.yml up -d payment-service;"
             fi
 
             if [ "${{ needs.changes.outputs.gateway }}" = "true" ]; then
-              COMMANDS="${COMMANDS} docker compose pull gateway-service; docker compose up -d gateway-service;"
+              COMMANDS="${COMMANDS} docker compose -f docker-compose.prod.yml pull gateway-service; docker compose -f docker-compose.prod.yml up -d gateway-service;"
             fi
 
           fi
 
+
+          # ----------------------------------------------------
+          # Show deployment commands
+          # ----------------------------------------------------
+
           echo "Deployment commands:"
           echo "$COMMANDS"
+
 
           # ----------------------------------------------------
           # Execute deployment through SSM
@@ -623,6 +631,8 @@ jobs:
             --comment "Deploy banking application" \
             --parameters "commands=[
               \"cd /opt/banking\",
+              \"test -f docker-compose.prod.yml\",
+              \"docker compose -f docker-compose.prod.yml config\",
               \"aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin 091708608610.dkr.ecr.eu-north-1.amazonaws.com\",
               \"$COMMANDS\",
               \"docker image prune -f\"
@@ -630,7 +640,9 @@ jobs:
             --query "Command.CommandId" \
             --output text)
 
+
           echo "Deployment command ID: $COMMAND_ID"
+
 
           # ----------------------------------------------------
           # WAIT
@@ -639,6 +651,7 @@ jobs:
           aws ssm wait command-executed \
             --command-id "$COMMAND_ID" \
             --instance-id "$INSTANCE_ID"
+
 
           # ----------------------------------------------------
           # SHOW OUTPUT
