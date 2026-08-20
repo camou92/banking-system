@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 
 Description: >
-  Banking System - Phase 10
+  Banking System - Phase 11
   VPC + Public Subnet + Internet Gateway + EC2 + IAM
 
 Parameters:
